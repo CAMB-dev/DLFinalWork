@@ -192,8 +192,8 @@ class CrossEntropyLoss:
 
 
 class SGD:
-    def __init__(self, learning_rate: float = 0.01):
-        self.learning_rate = learning_rate
+    def __init__(self, lr: float = 0.01):
+        self.learning_rate = lr
 
     def step(self, params, grads):
         for param, grad in zip(params, grads):
@@ -201,7 +201,7 @@ class SGD:
 
 
 class SGDWithMomentum:
-    def __init__(self, lr=0.01, momentum=0.9, weight_decay=0.0):
+    def __init__(self, lr=0.01, momentum=0.9, weight_decay=0.0001):
         """
         :param lr: learning rate
         :param momentum: momentum factor
@@ -895,3 +895,14 @@ class SigmoidLayer(BaseLayer):
 
     def backward(self, gradients):
         return gradients * self.outputs * (1 - self.outputs)
+
+
+class BinaryCrossEntropyLoss:
+    def forward(self, predicted, true):
+        predicted = cp.clip(predicted, 1e-7, 1 - 1e-7)
+        loss = -cp.mean(true * cp.log(predicted) +
+                        (1 - true) * cp.log(1 - predicted))
+        return loss
+
+    def backward(self):
+        return (self.predicted - self.true) / self.true.shape[0]

@@ -1,3 +1,4 @@
+import cv2
 import random
 import cupy as cp
 import os
@@ -122,3 +123,55 @@ class Compose:
         for t in self.transforms:
             img = t(img)
         return img
+
+
+def load_cats_dogs(data_dir, img_size=(64, 64)):
+    categories = ['cat', 'dog']
+    x_data = []
+    y_data = []
+    for label, category in enumerate(categories):
+        folder = os.path.join(data_dir, category)
+        for img_file in os.listdir(folder):
+            img_path = os.path.join(folder, img_file)
+            try:
+                # 检查文件是否为图像（防止非图像文件干扰）
+                if not img_file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    continue
+                img = cv2.imread(img_path)
+                if img is None:
+                    # print(f"Warning: Failed to read {img_path}, skipping.")
+                    continue
+                # 处理灰度图像（强制转换为3通道）
+                if len(img.shape) == 2:
+                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                img = cv2.resize(img, img_size)  # 确保 img_size 有效（如 (64,64)）
+                img = img.transpose(2, 0, 1)     # (H, W, C) -> (C, H, W)
+                x_data.append(img)
+                y_data.append(label)
+            except Exception as e:
+                print(f"Error processing {img_path}: {e}")
+                continue
+    if len(x_data) == 0:
+        raise ValueError("No valid images found in the dataset directory.")
+    x_data = np.array(x_data, dtype=np.float32) / 255.0  # 归一化
+    y_data = np.array(y_data)
+    return x_data, y_data
+
+
+def load_and_process_cats_dogs(data_dir):
+    x_data, y_data = load_cats_dogs(data_dir)
+    # 划分训练集和测试集（示例比例）
+    split = int(0.8 * len(x_data))
+    x_train, y_train = x_data[:split], y_data[:split]
+    x_test, y_test = x_data[split:], y_data[split:]
+
+    # shuffle
+    indices = np.arange(len(x_data))
+    np.random.shuffle(indices)
+    x_data = x_data[indices]
+    y_data = y_data[indices]
+
+    # 转换为独热编码（二分类）
+    y_train = one_hot_encode(y_train, num_classes=2)
+    y_test = one_hot_encode(y_test, num_classes=2)
+    return x_train, y_train, x_test, y_test

@@ -24,6 +24,11 @@ def train(config: TrainModelConfig):
         correct_predictions = 0
         total_samples = 0
 
+        # 调整学习率
+        if config.use_learning_rate_decay and epoch > 0 and epoch % 5 == 0:
+            optimizer.lr *= 0.5  # 每5个epoch降低学习率
+            logger.info(f"Learning rate adjusted to {optimizer.lr}")
+
         for batch_idx in range(num_batches):
             batch_start = batch_idx * batch_size
             batch_end = (batch_idx + 1) * batch_size
@@ -35,8 +40,9 @@ def train(config: TrainModelConfig):
             loss = loss_function.forward(output, y_batch)
             epoch_loss += loss
 
-            ####################### L2 正则化项（L2 权重衰减）#####################################
-            l2_lambda = 1e-4  # L2 正则化强度，可以调整
+            # ####################### L2 正则化项（L2 权重衰减）#####################################
+            # L2 正则化项（L2 权重衰减）
+            l2_lambda = 1e-4  # 可以调整为1e-4到1e-5之间
             l2_reg = 0
 
             # 遍历模型所有层，累加 L2 正则化项
@@ -46,7 +52,7 @@ def train(config: TrainModelConfig):
 
             # 最终损失 = 原始损失 + L2 正则化项
             loss += l2_lambda * l2_reg
-            ####################################################################################
+            # ####################################################################################
 
             gradients = loss_function.backward()
 
