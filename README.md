@@ -22,3 +22,5 @@ Try use `conda` or `mamba` in `miniforge`
 # Thanks
 
 Refer to the design concept and source code of `PyTorch`
+
+Dataset `CIFAR-10` from https://www.cs.toronto.edu/~kriz/cifar.html
