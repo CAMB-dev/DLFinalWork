@@ -3,8 +3,13 @@ import cupy as cp
 from common import TrainModelConfig
 from validate import validate
 from plot import plot_confusion_matrix, plot_loss
-from data_loader import apply_transform_batch
+from data_loader import *
 
+train_transform = Compose([
+    RandomHorizontalFlip(p=0.5),
+    Normalize(mean=[0.4467, 0.4398, 0.4066],
+              std=[0.2603, 0.2566, 0.2713])
+])
 
 def train(config: TrainModelConfig):
     model = config.network
@@ -24,19 +29,36 @@ def train(config: TrainModelConfig):
         correct_predictions = 0
         total_samples = 0
 
+        # 调整学习率
+        if config.use_learning_rate_decay and epoch > 0 and epoch % 5 == 0:
+            if optimizer.lr <= 1e-7:
+                optimizer.lr = 0.0001
+                logger.info(f'Reset learning rate to 0.0001')
+            else:
+                optimizer.lr *= 0.5  # 每5个epoch降低学习率
+                logger.info(f"Learning rate adjusted to {optimizer.lr}")
+
+
         for batch_idx in range(num_batches):
             batch_start = batch_idx * batch_size
             batch_end = (batch_idx + 1) * batch_size
-            x_batch = x_train[batch_start:batch_end]
+            #x_batch = x_train[batch_start:batch_end]
+            x_batch = apply_transform_batch(x_train[batch_start:batch_end], train_transform)
 
             y_batch = y_train[batch_start:batch_end]
+
+            # 转换标签为 one-hot 编码
+            # STL-10 是10类
+            num_classes = output.shape[1] if 'output' in locals() else 10
+            y_batch = cp.eye(num_classes)[y_batch]
 
             output = model.forward(x_batch)
             loss = loss_function.forward(output, y_batch)
             epoch_loss += loss
 
-            ####################### L2 正则化项（L2 权重衰减）#####################################
-            l2_lambda = 1e-4  # L2 正则化强度，可以调整
+            # ####################### L2 正则化项（L2 权重衰减）#####################################
+            # L2 正则化项（L2 权重衰减）
+            l2_lambda = 1e-4  # 可以调整为1e-4到1e-5之间
             l2_reg = 0
 
             # 遍历模型所有层，累加 L2 正则化项
@@ -46,7 +68,7 @@ def train(config: TrainModelConfig):
 
             # 最终损失 = 原始损失 + L2 正则化项
             loss += l2_lambda * l2_reg
-            ####################################################################################
+            # ####################################################################################
 
             gradients = loss_function.backward()
 

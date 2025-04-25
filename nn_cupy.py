@@ -35,22 +35,57 @@ class SequentialLayer:
         self) -> str: return ' -> '.join([layer.__class__.__name__ for layer in self.layers])
 
     def get_state_dict(self):
-        """返回模型的参数（权重和偏置）"""
         state_dict = {}
         for i, layer in enumerate(self.layers):
             if hasattr(layer, 'weights'):
                 state_dict[f'layer_{i}_weights'] = layer.weights
             if hasattr(layer, 'bias'):
                 state_dict[f'layer_{i}_bias'] = layer.bias
+            if hasattr(layer, 'gamma'):
+                state_dict[f'layer_{i}_gamma'] = layer.gamma
+            if hasattr(layer, 'beta'):
+                state_dict[f'layer_{i}_beta'] = layer.beta
         return state_dict
 
     def set_state_dict(self, state_dict):
-        """根据保存的状态字典加载模型参数"""
         for i, layer in enumerate(self.layers):
             if f'layer_{i}_weights' in state_dict:
                 layer.weights = state_dict[f'layer_{i}_weights']
             if f'layer_{i}_bias' in state_dict:
                 layer.bias = state_dict[f'layer_{i}_bias']
+            if f'layer_{i}_gamma' in state_dict:
+                layer.gamma = state_dict[f'layer_{i}_gamma']
+            if f'layer_{i}_beta' in state_dict:
+                layer.beta = state_dict[f'layer_{i}_beta']
+
+    def get_parameters_and_gradients(self):
+        params = []
+        grads = []
+        for layer in self.layers:
+            if hasattr(layer, 'weights'):
+                params.append(layer.weights)
+                grads.append(getattr(layer, 'weights_gradients', cp.zeros_like(layer.weights)))
+            if hasattr(layer, 'bias'):
+                params.append(layer.bias)
+                grads.append(getattr(layer, 'bias_gradients', cp.zeros_like(layer.bias)))
+            if hasattr(layer, 'gamma'):
+                params.append(layer.gamma)
+                grads.append(getattr(layer, 'gamma_gradients', cp.zeros_like(layer.gamma)))
+            if hasattr(layer, 'beta'):
+                params.append(layer.beta)
+                grads.append(getattr(layer, 'beta_gradients', cp.zeros_like(layer.beta)))
+        return params, grads
+
+    def zero_gradients(self):
+        for layer in self.layers:
+            if hasattr(layer, 'weights_gradients'):
+                layer.weights_gradients.fill(0.0)
+            if hasattr(layer, 'bias_gradients'):
+                layer.bias_gradients.fill(0.0)
+            if hasattr(layer, 'gamma_gradients'):
+                layer.gamma_gradients.fill(0.0)
+            if hasattr(layer, 'beta_gradients'):
+                layer.beta_gradients.fill(0.0)
 
 
 class LinearLayer(BaseLayer):
@@ -192,8 +227,8 @@ class CrossEntropyLoss:
 
 
 class SGD:
-    def __init__(self, learning_rate: float = 0.01):
-        self.learning_rate = learning_rate
+    def __init__(self, lr: float = 0.01):
+        self.learning_rate = lr
 
     def step(self, params, grads):
         for param, grad in zip(params, grads):
@@ -201,7 +236,7 @@ class SGD:
 
 
 class SGDWithMomentum:
-    def __init__(self, lr=0.01, momentum=0.9, weight_decay=0.0):
+    def __init__(self, lr=0.01, momentum=0.9, weight_decay=0.0001):
         """
         :param lr: learning rate
         :param momentum: momentum factor
@@ -354,8 +389,29 @@ class BatchNorm2D:
         return out
 
     def backward(self, dout):
-        # 可选：实现反向传播支持优化（此处略，可只使用正向）
-        return dout
+        B, C, H, W = dout.shape
+
+        # 反向传播 gamma 和 beta
+        dgamma = cp.sum(dout * self.normalized, axis=(0, 2, 3), keepdims=True)
+        dbeta = cp.sum(dout, axis=(0, 2, 3), keepdims=True)
+
+        # 反向传播输入
+        dx_hat = dout * self.gamma  # (B, C, H, W)
+
+        var = cp.var(self.x, axis=(0, 2, 3), keepdims=True)
+        mean = cp.mean(self.x, axis=(0, 2, 3), keepdims=True)
+        std_inv = 1. / cp.sqrt(var + self.epsilon)
+
+        x_mu = self.x - mean
+
+        dx = (1. / (B * H * W)) * std_inv * (
+            (B * H * W) * dx_hat -
+            cp.sum(dx_hat, axis=(0, 2, 3), keepdims=True) -
+            x_mu * std_inv**2 * cp.sum(dx_hat * x_mu, axis=(0, 2, 3), keepdims=True)
+        )
+
+        return dx, dgamma, dbeta
+
 
 
 class BatchNorm1D:
@@ -715,87 +771,6 @@ class DenseLayer(BaseLayer):
         self.bias_gradients = d_bias
         return d_inputs, d_weights, d_bias
 
-# class DenseLayer(BaseLayer):
-#     def __init__(self, input_size, output_size, activation_function=None):
-#         """
-#         初始化Dense层。
-
-#         :param input_size: 输入的特征数（即前一层的输出大小）
-#         :param output_size: 输出的特征数（即当前层的神经元数量）
-#         :param activation_function: 激活函数，默认为None，若指定则使用该激活函数
-#         """
-#         self.input_size = input_size
-#         self.output_size = output_size
-#         self.activation_function = activation_function
-
-#         # 初始化权重和偏置
-#         self.weights = cp.random.randn(
-#             input_size, output_size) * 0.01  # 小随机数初始化
-#         self.bias = cp.zeros((1, output_size))  # 偏置初始化为0
-
-#         # 保存前向传播的输入值，用于反向传播
-#         self.inputs = None
-#         self.outputs = None
-#         self.weights_gradients = None
-#         self.bias_gradients = None
-
-#     def forward(self, inputs):
-#         """
-#         前向传播函数
-
-#         :param inputs: 输入数据（形状为 (batch_size, input_size)）
-#         :return: 输出数据（形状为 (batch_size, output_size)）
-#         """
-#         self.inputs = inputs
-#         self.outputs = cp.dot(inputs, self.weights) + self.bias  # 线性变换
-
-#         if self.activation_function:
-#             self.outputs = self.activation_function(self.outputs)  # 激活函数
-
-#         return self.outputs
-
-#     # def backward(self, gradients, learning_rate=0.01):
-#     #     """
-#     #     反向传播函数，计算梯度并更新权重和偏置
-
-#     #     :param gradients: 来自上一层的梯度
-#     #     :param learning_rate: 学习率，用于更新权重
-#     #     :return: 返回梯度传递给前一层
-#     #     """
-
-#     #     d_weights = cp.dot(self.inputs.T, gradients)
-#     #     d_bias = cp.sum(gradients, axis=0, keepdims=True)
-#     #     d_inputs = cp.dot(gradients, self.weights.T)
-
-#     #     self.weights_gradients = d_weights
-#     #     self.bias_gradients = d_bias
-#     #     return d_inputs, d_weights, d_bias
-
-#     def backward(self, gradients, learning_rate=0.01):
-#         """
-#         Backward pass for Dense layer handling different gradient shapes
-#         """
-#         # Handle case where gradients is a 1D array (512,)
-#         if len(gradients.shape) == 1:
-#             # Reshape to (batch_size, output_size)
-#             batch_size = self.inputs.shape[0]
-#             gradients = cp.tile(gradients.reshape(1, -1), (batch_size, 1))
-
-#         # Handle case where batch dimension is 1 but should be larger
-#         elif gradients.shape[0] == 1 and self.inputs.shape[0] > 1:
-#             # Broadcast to match batch size
-#             batch_size = self.inputs.shape[0]
-#             gradients = cp.tile(gradients, (batch_size, 1))
-
-#         # Calculate gradients with proper shapes
-#         d_weights = cp.dot(self.inputs.T, gradients)
-#         d_bias = cp.sum(gradients, axis=0, keepdims=True)
-#         d_inputs = cp.dot(gradients, self.weights.T)
-
-#         self.weights_gradients = d_weights
-#         self.bias_gradients = d_bias
-#         return d_inputs, d_weights, d_bias
-
 
 class MaxPoolingLayer:
     def __init__(self, pool_size=2, stride=2):
@@ -827,62 +802,6 @@ class MaxPoolingLayer:
         dX[self.max_mask] = dout_repeated[self.max_mask]
         return dX
 
-# class MaxPoolingLayer(BaseLayer):
-#     def __init__(self, pool_size=2, stride=2):
-#         self.pool_size = pool_size
-#         self.stride = stride
-#         self.ctx = None
-
-#     def forward(self, input_data):
-#         self.input_data = input_data
-#         B, C, H, W = input_data.shape
-#         PH = PW = self.pool_size
-#         S = self.stride
-
-#         H_out = (H - PH) // S + 1
-#         W_out = (W - PW) // S + 1
-#         out = cp.zeros((B, C, H_out, W_out))
-#         self.mask = cp.zeros_like(input_data)  # 用于记录最大值位置
-
-#         for b in range(B):
-#             for c in range(C):
-#                 for i in range(H_out):
-#                     for j in range(W_out):
-#                         h_start = i * S
-#                         h_end = h_start + PH
-#                         w_start = j * S
-#                         w_end = w_start + PW
-#                         region = input_data[b, c, h_start:h_end, w_start:w_end]
-#                         max_val = cp.max(region)
-#                         out[b, c, i, j] = max_val
-#                         # 记录最大值位置（用于反向传播）
-#                         max_mask = (region == max_val)
-#                         self.mask[b, c, h_start:h_end,
-#                                   w_start:w_end] += max_mask
-
-#         self.ctx = (input_data.shape, out.shape)
-#         return out
-
-#     def backward(self, output_gradient, learning_rate=None):
-#         B, C, H_out, W_out = output_gradient.shape
-#         PH = PW = self.pool_size
-#         S = self.stride
-
-#         dX = cp.zeros_like(self.input_data)
-
-#         for b in range(B):
-#             for c in range(C):
-#                 for i in range(H_out):
-#                     for j in range(W_out):
-#                         h_start = i * S
-#                         h_end = h_start + PH
-#                         w_start = j * S
-#                         w_end = w_start + PW
-#                         mask = self.mask[b, c, h_start:h_end, w_start:w_end]
-#                         dX[b, c, h_start:h_end, w_start:w_end] += mask * \
-#                             output_gradient[b, c, i, j]
-
-#         return dX
 
 
 class SigmoidLayer(BaseLayer):
@@ -895,3 +814,14 @@ class SigmoidLayer(BaseLayer):
 
     def backward(self, gradients):
         return gradients * self.outputs * (1 - self.outputs)
+
+
+class BinaryCrossEntropyLoss:
+    def forward(self, predicted, true):
+        predicted = cp.clip(predicted, 1e-7, 1 - 1e-7)
+        loss = -cp.mean(true * cp.log(predicted) +
+                        (1 - true) * cp.log(1 - predicted))
+        return loss
+
+    def backward(self):
+        return (self.predicted - self.true) / self.true.shape[0]
